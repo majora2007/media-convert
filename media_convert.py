@@ -5,123 +5,20 @@ import os
 import logging
 from pymediainfo import MediaInfo
 import subprocess
+import signal
 import psutil
 import time
 from progressbar import (update_progress, restart_line)
 
 
 #######################################################################
-#                       PROGRESS BAR
-
-#######################################################################
-
-def setup_logger(dir, filename, debug_lvl):
-    log_file = filename
-    log_directory = os.path.abspath(dir)
-
-    if not os.path.exists(log_directory):
-        os.mkdir(log_directory)
-
-    log_filePath = os.path.join(log_directory, log_file)
-
-    if not os.path.isfile(log_filePath):
-        with open(log_filePath, "w") as emptylog_file:
-            emptylog_file.write('');
-
-    logging.basicConfig(filename=log_filePath,level=debug_lvl, format='%(asctime)s %(message)s')
-
-valid_extensions = ['rmvb', 'mkv', 'avi']
-def needs_convert(file):
-    return file.endswith('mkv') or file.endswith('avi')
-
-def normalize_path(path):
-    return path.replace('\\', '/')
-
-def create_cmd(cmd, source):
-    parts = source.split('.')
-    parts[len(parts)-1] = EXT
-    output_path = '.'.join(parts)
-
-    return cmd.replace('{{source}}', source).replace('{{destination}}', output_path)
-
-def convert(path):
-    '''
-    Converts a normalized path of video file into normalized handbrake file.
-    '''
-    logger = logging.getLogger(__name__)
-    logger.info('Converting ' + path)
-
-    cmd = create_cmd(handbrake_cli, path)
-
-    logger.debug('Using command: ' + cmd)
-    p =subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-
-    for line in p.stdout.readlines():
-        logger.debug(line)
-    retval = p.wait()
-    logger.debug('Convert returned: ' + str(retval))
-    print 'Convert finished'
-
-    return retval
-
-def remux(path):
-    '''
-    Calls ffmpeg to perform container swap
-    '''
-    logger = logging.getLogger(__name__)
-    logger.info('Remuxing ' + path)
-
-    cmd = create_cmd(ffmpeg_cli, path)
-
-    logger.debug('Using command: ' + cmd)
-    p =subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-
-    for line in p.stdout.readlines():
-        logger.debug(line)
-    retval = p.wait()
-    logger.debug('Remux returned: ' + str(retval))
-    print 'Remux finished'
-
-    return retval
-
-def delete(path):
-    logger = logging.getLogger(__name__)
-    logger.info('Deleting ' + path)
-    os.remove(path)
-
-
-def process(video_list):
-    i = 0
-    while(i < len(video_list)):
-        restart_line()
-        update_progress((i*1.0)/float(len(video_list)))
-        media = video_list[i]
-
-        cpu_perc = psutil.cpu_percent(interval=1)
-        if cpu_perc < MAX_CPU_THRESHOLD:
-            print 'Processing ' + str(media.tracks[0].complete_name)
-            if convert(media.tracks[0].complete_name) is 0:
-                if DELETE:
-                    try:
-                        delete(media.tracks[0].complete_name)
-                    except OSError:
-                        logger.exception('There was an issue deleting ' + str(media.tracks[0].complete_name))
-                        # Idea: Delete the byproduct instead, we can attempt delete on next run
-                print media.tracks[0].complete_name + ' Fully processed'
-            else:
-                logger.info('Failed to convert ' + media.tracks[0].complete_name)
-                print ('Failed to convert ' + media.tracks[0].complete_name)
-            i = i + 1
-        else:
-            logger.info('CPU utilization is ' + str(cpu_perc) + ' which is greater than ' + str(MAX_CPU_THRESHOLD) + '. Sleeping for 15 secs')
-            print('CPU utilization is ' + str(cpu_perc) + ' which is greater than ' + str(MAX_CPU_THRESHOLD) + '. Sleeping for 15 secs')
-            time.sleep(15)
+#                       Variables
 
 handbrake_cli = 'HandBrakeCLI -i "{{source}}" -o "{{destination}}" --preset="Plex-CC"'
 ffmpeg_cli = 'ffmpeg -i "{{source}}" -vcodec copy -acodec copy "{{destination}}"'
 
 # A list of directories to scan
-watched_folders = ['K:/Series', 'K:/Movies']
+watched_folders = ['K:/Series/Hannibal/Season 03']
 exclude = []
 
 # Paths to all valid files
@@ -148,9 +45,132 @@ global EXT
 EXT = 'mp4'
 
 
+
+#######################################################################
+
+
+
+
+def setup_logger(dir, filename, debug_lvl):
+    log_file = filename
+    log_directory = os.path.abspath(dir)
+
+    if not os.path.exists(log_directory):
+        os.mkdir(log_directory)
+
+    log_filePath = os.path.join(log_directory, log_file)
+
+    if not os.path.isfile(log_filePath):
+        with open(log_filePath, "w") as emptylog_file:
+            emptylog_file.write('');
+
+    logging.basicConfig(filename=log_filePath,level=debug_lvl, format='%(asctime)s %(message)s')
+
+valid_extensions = ['rmvb', 'mkv', 'avi']
+def needs_convert(file):
+    return file.endswith('mkv') or file.endswith('avi')
+
+def normalize_path(path):
+    return path.replace('\\', '/')
+
+def to_mp4_naming(filename):
+    parts = filename.split('.')
+    parts[len(parts)-1] = EXT
+    output_path = '.'.join(parts)
+    return output_path
+
+def create_cmd(cmd, source):
+    output_path = to_mp4_naming(source)
+
+    return cmd.replace('{{source}}', source).replace('{{destination}}', output_path), output_path
+
+def convert(path):
+    '''
+    Converts a normalized path of video file into normalized handbrake file.
+    '''
+    logger = logging.getLogger(__name__)
+    logger.info('Converting ' + path)
+
+    cmd, _ = create_cmd(handbrake_cli, path)
+
+    logger.debug('Using command: ' + cmd)
+    p =subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    for line in p.stdout.readlines():
+        logger.debug(line)
+    retval = p.wait()
+    logger.debug('Convert returned: ' + str(retval))
+    print 'Convert finished'
+
+    return retval
+
+def remux(path):
+    '''
+    Calls ffmpeg to perform container swap
+    '''
+    logger = logging.getLogger(__name__)
+    logger.info('Remuxing ' + path)
+
+    cmd, _ = create_cmd(ffmpeg_cli, path)
+
+    logger.debug('Using command: ' + cmd)
+    p =subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    for line in p.stdout.readlines():
+        logger.debug(line)
+    retval = p.wait()
+    logger.debug('Remux returned: ' + str(retval))
+    print 'Remux finished'
+
+    return retval
+
+def delete(path):
+    logger = logging.getLogger(__name__)
+    logger.info('Deleting ' + path)
+    os.remove(path)
+
+
+def process(video_list, process_func):
+    i = 0
+    while(i < len(video_list)):
+        restart_line()
+        update_progress((i*1.0)/float(len(video_list)))
+        media = video_list[i]
+
+        cpu_perc = psutil.cpu_percent(interval=1)
+        if cpu_perc < MAX_CPU_THRESHOLD:
+            print 'Processing ' + str(media.tracks[0].complete_name)
+            if process_func(media.tracks[0].complete_name) is 0:
+                if DELETE:
+                    try:
+                        delete(media.tracks[0].complete_name)
+                    except OSError:
+                        logger.exception('There was an issue deleting ' + str(media.tracks[0].complete_name))
+                        # Idea: Delete the byproduct instead, we can attempt delete on next run
+                print media.tracks[0].complete_name + ' Fully processed'
+            else:
+                logger.info('Failed to convert ' + media.tracks[0].complete_name)
+                print ('Failed to convert ' + media.tracks[0].complete_name)
+                print 'Cleaning up...'
+                delete(to_mp4_naming(media.tracks[0].complete_name))
+            i = i + 1
+        else:
+            logger.info('CPU utilization is ' + str(cpu_perc) + ' which is greater than ' + str(MAX_CPU_THRESHOLD) + '. Sleeping for 15 secs')
+            print('CPU utilization is ' + str(cpu_perc) + ' which is greater than ' + str(MAX_CPU_THRESHOLD) + '. Sleeping for 15 secs')
+            time.sleep(15)
+
+def signal_handler(signum, frame):
+    pass
+
+
+
 if __name__ == '__main__':
     setup_logger('.', 'media-convert.log', logging.DEBUG)
     logger = logging.getLogger(__name__)
+
+    # Register signals, such as CTRL + C
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     logger.info("######### Script Executed at " + time.asctime(time.localtime(time.time())))
 
@@ -201,13 +221,7 @@ if __name__ == '__main__':
     if JUST_CHECK:
         sys.exit()
 
-
-    # Start batch processing Re-encodes
-    #process_transcodes(handbrakes)
-    #process(handbrakes)
-
-    # Start batch processing Re-encodes
-    #process_remux(remuxes)
-    process(remuxes)
+    process(remuxes, remux)
+    process(handbrakes, convert)
 
 
